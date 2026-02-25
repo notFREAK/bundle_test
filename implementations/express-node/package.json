@@ -1,0 +1,1 @@
+{ "name":"gateway-express", "private":true, "scripts":{"start":"node index.js"}, "dependencies":{"express":"^4.19.2"} }
