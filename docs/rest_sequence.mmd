@@ -1,0 +1,167 @@
+%% Mermaid sequence diagrams for REST API of OPC UA -> REST Gateway
+%% Можно открыть в Mermaid Live / VSCode Mermaid preview
+
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+    participant A as AuditLog
+
+    Note over C,G: POST /api/v1/auth/register
+    C->>G: register(email, username, password, displayName)
+    G->>DB: SELECT users by email/username
+    alt user exists
+        G->>A: INSERT audit_log(auth.register, success=false, 409)
+        G-->>C: 409 CONFLICT
+    else user not exists
+        G->>G: validate + hash password
+        G->>DB: INSERT users(..., role='viewer')
+        G->>A: INSERT audit_log(auth.register, success=true, 201)
+        G-->>C: 201 Created + user DTO
+    end
+
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+    participant A as AuditLog
+
+    Note over C,G: POST /api/v1/auth/login
+    C->>G: login(login, password)
+    G->>DB: SELECT user by email/username
+    alt invalid credentials / inactive user
+        G->>A: INSERT audit_log(auth.login, success=false, 401/423)
+        G-->>C: 401/423
+    else valid
+        G->>G: verify password
+        G->>G: issue access JWT + refresh token
+        G->>DB: INSERT refresh_tokens(token_hash, expires_at,...)
+        G->>DB: UPDATE users.last_login_at
+        G->>A: INSERT audit_log(auth.login, success=true, 200)
+        G-->>C: 200 OK + accessToken + refreshToken
+    end
+
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+    participant A as AuditLog
+
+    Note over C,G: POST /api/v1/auth/refresh
+    C->>G: refresh(refreshToken)
+    G->>G: hash incoming refresh token
+    G->>DB: SELECT refresh_tokens by token_hash
+    alt token invalid / expired / revoked
+        G->>A: INSERT audit_log(auth.refresh, success=false, 401)
+        G-->>C: 401 UNAUTHORIZED
+    else valid token
+        G->>G: issue new access JWT (+ optional refresh rotation)
+        opt refresh rotation enabled
+            G->>DB: UPDATE old refresh_tokens.revoked_at
+            G->>DB: INSERT new refresh_tokens(..., replaced chain)
+        end
+        G->>A: INSERT audit_log(auth.refresh, success=true, 200)
+        G-->>C: 200 OK + new tokens
+    end
+
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+    participant A as AuditLog
+
+    Note over C,G: POST /api/v1/auth/logout
+    C->>G: logout(refreshToken)
+    G->>G: hash refresh token
+    G->>DB: UPDATE refresh_tokens SET revoked_at=now() WHERE token_hash=...
+    G->>A: INSERT audit_log(auth.logout, success=true, 204)
+    G-->>C: 204 No Content
+
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+
+    Note over C,G: GET /api/v1/auth/me
+    C->>G: Authorization: Bearer <accessToken>
+    G->>G: verify JWT
+    alt invalid token
+        G-->>C: 401 UNAUTHORIZED
+    else valid token
+        G->>DB: SELECT users by sub (user id)
+        G-->>C: 200 OK + user DTO
+    end
+
+sequenceDiagram
+    autonumber
+    participant BG as OPCUA Poller (inside Gateway)
+    participant O as OPC UA Server
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+    participant C as Client
+
+    Note over BG,O: Background polling loop (every opcua.pollIntervalMs)
+    loop Every pollIntervalMs
+        BG->>O: Read DeviceMetrics/* (6 nodes)
+        alt read success
+            BG->>G: Update in-memory cache snapshot
+            BG->>DB: UPDATE opcua_sources(last_read_at,status,...)
+            opt history enabled
+                BG->>DB: INSERT metric_snapshots(...)
+            end
+        else read error
+            BG->>DB: UPDATE opcua_sources(status='degraded/error', consecutive_errors++, last_error)
+        end
+    end
+
+    Note over C,G: GET /api/v1/metrics/current
+    C->>G: Bearer token
+    G->>G: verify JWT + role(viewer/operator/admin)
+    alt cache empty
+        G-->>C: 503 SOURCE_UNAVAILABLE
+    else cache exists
+        G-->>C: 200 OK + current metrics snapshot
+    end
+
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+
+    Note over C,G: GET /api/v1/gateway/status
+    C->>G: Bearer token
+    G->>G: verify JWT + role
+    G->>DB: SELECT opcua_sources (optional, if status persisted)
+    G-->>C: 200 OK + service/opcua/cache status
+
+sequenceDiagram
+    autonumber
+    participant C as Admin Client
+    participant G as REST Gateway
+    participant DB as PostgreSQL
+    participant A as AuditLog
+
+    Note over C,G: GET /api/v1/users (admin)
+    C->>G: Bearer admin token
+    G->>G: verify JWT + role=admin
+    G->>DB: SELECT users ORDER BY created_at DESC
+    G->>A: INSERT audit_log(users.list, success=true, 200)
+    G-->>C: 200 OK + users[]
+
+    Note over C,G: PATCH /api/v1/users/{userId} (admin)
+    C->>G: patch {role,isActive,displayName}
+    G->>G: verify JWT + role=admin + validate body
+    G->>DB: UPDATE users SET ... WHERE id=:userId
+    alt user not found
+        G->>A: INSERT audit_log(users.update, success=false, 404)
+        G-->>C: 404 NOT_FOUND
+    else updated
+        G->>A: INSERT audit_log(users.update, success=true, 200)
+        G-->>C: 200 OK + updated user
+    end
