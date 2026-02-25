@@ -1,0 +1,54 @@
+services:
+  aspnet-core:
+    build: ./implementations/aspnet-core
+    ports: ["5101:5101"]
+  go-svc:
+    build: ./implementations/go-svc
+    ports: ["8080:8080"]
+  java-spring:
+    build: ./implementations/java-spring
+    ports: ["8081:8081"]
+  kotlin-spring:
+    build: ./implementations/kotlin-spring
+    ports: ["8082:8082"]
+  nest-ts:
+    build: ./implementations/nest-ts
+    ports: ["3000:3000"]
+  express-node:
+    build: ./implementations/express-node
+    ports: ["3001:3001"]
+  fastapi-python:
+    build: ./implementations/fastapi-python
+    environment:
+      OPCUA_ENDPOINT: opc.tcp://opcua-server:4840/metrics/server/
+      POSTGRES_DSN: postgresql://gateway_user:gateway_pass@postgres:5432/gatewaydb
+    ports: ["8000:8000"]
+    depends_on: [opcua-server, postgres]
+  django-python:
+    build: ./implementations/django-python
+    ports: ["8001:8001"]
+  laravel-php:
+    build: ./implementations/laravel-php
+    ports: ["8002:8002"]
+  rails-ruby:
+    build: ./implementations/rails-ruby
+    ports: ["8003:8003"]
+  rust-axum:
+    build: ./implementations/rust-axum
+    ports: ["3002:3002"]
+  phoenix-elixir:
+    build: ./implementations/phoenix-elixir
+    ports: ["8004:8004"]
+
+  opcua-server:
+    build: ./opcua-server
+    ports: ["4840:4840"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gatewaydb
+      POSTGRES_USER: gateway_user
+      POSTGRES_PASSWORD: gateway_pass
+    ports: ["5432:5432"]
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
